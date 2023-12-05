@@ -1,0 +1,15 @@
+﻿---
+BasedOnStyle: Microsoft
+AccessModifierOffset: '0'
+AlignAfterOpenBracket: AlwaysBreak
+AlignConsecutiveMacros: 'true'
+AlignConsecutiveAssignments: 'true'
+AlignConsecutiveDeclarations: 'true'
+AlignEscapedNewlines: Left
+AlignTrailingComments: 'true'
+AllowShortBlocksOnASingleLine: 'false'
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: 'true'
+ColumnLimit: '100'
+IndentCaseLabels: 'true'
+...
