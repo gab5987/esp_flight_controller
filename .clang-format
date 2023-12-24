@@ -10,6 +10,6 @@ AlignTrailingComments: 'true'
 AllowShortBlocksOnASingleLine: 'false'
 AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLoopsOnASingleLine: 'true'
-ColumnLimit: '100'
+ColumnLimit: '80'
 IndentCaseLabels: 'true'
 ...

@@ -7,6 +7,7 @@ Checks: >
   -readability-braces-around-statements,
   -readability-magic-numbers,
   -modernize-use-nullptr,
+  -readability-function-cognitive-complexity,
   -bugprone-easily-swappable-parameters
 
 CheckOptions:
@@ -18,5 +19,3 @@ CheckOptions:
   - { key: readability-identifier-naming.EnumConstantCase,            value: UPPER_CASE }
   - { key: readability-identifier-naming.ConstexprVariableCase,       value: UPPER_CASE }
   - { key: readability-identifier-naming.GlobalConstantCase,          value: UPPER_CASE }
-  - { key: readability-identifier-naming.StaticConstantPrefix,        value: s_}
-  - { key: readability-identifier-naming.naming.StaticVariablePrefix, value: s_}
