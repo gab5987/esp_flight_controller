@@ -16,9 +16,9 @@
  * REQ-MPU-003: Shall convert the raw data to rad/s, preferably during the read
  * function to avoid future overheading.
  *
- * REQ-MPU-004: Shall calculate the row and pitch values based on the
- * complimentory filter of both the accelerometer and the gyroscope using
- * Kalman's filter model.
+ * TODO:
+ * REQ-MPU-004: Shall calculate the row and pitch values based on both the
+ * accelerometer and the gyroscope data using Kalman's filter model.
  * */
 
 #include <driver/gpio.h>
@@ -65,7 +65,7 @@ enum
 
 static const char TAG[] = "IMU";
 
-static const f32 ALPHA      = 0.98F; /*!< Weight of gyroscope */
+static const f32 ALPHA      = 0.96F; /*!< Weight of gyroscope */
 static const f32 RAD_TO_DEG = (f32)(M_PI / (f32)180); /*!< Radians to degrees */
 
 static const gpio_num_t SCL_PIN  = GPIO_NUM_22;
@@ -104,13 +104,11 @@ static f32   s_acce_sensitivity = 0.0F;
 
 static struct mpu6050
 {
-    f32 ac_x, ac_y, ac_z;
     f32 cal_ac_x, cal_ac_y, cal_ac_z;
-
-    f32 gy_x, gy_y, gy_z;
     f32 cal_gy_x, cal_gy_y;
 
     f32 pitch, roll;
+    f32 pitch_uncertainty, roll_uncertainty;
 } s_device;
 
 static esp_err_t writeregister(
@@ -240,16 +238,36 @@ esp_err_t mpu6050_calibrate(void)
         f32 x, y, z;
     };
 
-    struct sens_axis acce_cal = {.x = 0, .y = 0, .z = 0};
-    struct sens_axis gyro_cal = {.x = 0, .y = 0, .z = 0};
+    struct sens_axis acce_cal    = {.x = 0, .y = 0, .z = 0};
+    struct sens_axis gyro_cal    = {.x = 0, .y = 0, .z = 0};
+    byte             data_rd[16] = {0};
 
     for (u8 i = 0; i < CALIBRATION_SAMPLES; i++)
     {
-        acce_cal.x += s_device.ac_x == INFINITY ? 0 : s_device.ac_x;
-        acce_cal.y += s_device.ac_y == INFINITY ? 0 : s_device.ac_y;
-        acce_cal.z += s_device.ac_z == INFINITY ? 0 : s_device.ac_z;
-        gyro_cal.x += s_device.gy_x == INFINITY ? 0 : s_device.gy_x;
-        gyro_cal.y += s_device.gy_y == INFINITY ? 0 : s_device.gy_y;
+        /*
+         * Calibration is done simply by taking the mean of the first 200
+         * samples from the sensor
+         * */
+
+        readregister(MPU6050_ACCEL_XOUT_H, data_rd, 14);
+
+        f32 acce_raw_x =
+            (f32)((i16)((data_rd[0] << 8) | data_rd[1])) / s_acce_sensitivity;
+        f32 acce_raw_y =
+            (f32)((i16)((data_rd[2] << 8) | data_rd[3])) / s_acce_sensitivity;
+        f32 acce_raw_z =
+            (f32)((i16)((data_rd[4] << 8) | data_rd[5])) / s_acce_sensitivity;
+
+        f32 gyro_raw_x =
+            (f32)((i16)((data_rd[8] << 8) | data_rd[9])) / s_gyro_sensitivity;
+        f32 gyro_raw_y =
+            (f32)((i16)((data_rd[10] << 8) | data_rd[11])) / s_gyro_sensitivity;
+
+        acce_cal.x += acce_raw_x == INFINITY ? 0 : acce_raw_x;
+        acce_cal.y += acce_raw_y == INFINITY ? 0 : acce_raw_y;
+        acce_cal.z += acce_raw_z == INFINITY ? 0 : acce_raw_z;
+        gyro_cal.x += gyro_raw_x == INFINITY ? 0 : gyro_raw_x;
+        gyro_cal.y += gyro_raw_y == INFINITY ? 0 : gyro_raw_y;
         vTaskDelay(CALIBRATION_SAMPLE_TIME);
     }
 
@@ -297,13 +315,19 @@ NORET static void sens_read_tsk(void *args)
         //     (f32)((i16)((data_rd[12] << 8) + data_rd[13])) /
         //     s_gyro_sensitivity;
 
-        s_device.ac_x = (acce_raw_x -= s_device.cal_ac_x);
-        s_device.ac_y = (acce_raw_y -= s_device.cal_ac_y);
-        s_device.ac_z = (acce_raw_z -= s_device.cal_ac_z);
-        s_device.gy_x = (gyro_raw_x -= s_device.cal_gy_x);
-        s_device.gy_y = (gyro_raw_y -= s_device.cal_gy_y);
+        acce_raw_x -= s_device.cal_ac_x;
+        acce_raw_y -= s_device.cal_ac_y;
+        acce_raw_z -= s_device.cal_ac_z;
+        gyro_raw_x -= s_device.cal_gy_x;
+        gyro_raw_y -= s_device.cal_gy_y;
 
         f32 powacz_2 = (f32)pow(acce_raw_z, 2);
+
+        i64 now = esp_timer_get_time();
+        f32 elapsed_time =
+            ((f32)(now - ptime) /
+             (const f32)(1000 * 1000 /* Convert to seconds so we get rad/s
+             */));
 
         /*
          * Given a rotation matrix R, we can compute the Euler angles, ψ, θ, and
@@ -330,14 +354,15 @@ NORET static void sens_read_tsk(void *args)
             (f32)(atan(-1 * acce_raw_x / sqrt(pow(acce_raw_y, 2) + powacz_2)));
         acce_angle_y /= RAD_TO_DEG;
 
+        /*
+         * For both the X and Y axis, the angle will be the integral
+         * accumulation of the past angle, plus the product of the current
+         * angular rotation and the time between the last measurement.
+         * 𝜃b = 𝜃a + Gz * Δt
+         * */
+
         static f32 gyro_angle_x = 0.0F;
         static f32 gyro_angle_y = 0.0F;
-
-        i64 now = esp_timer_get_time();
-        f32 elapsed_time =
-            ((f32)(now - ptime) /
-             (const f32)(1000 * 1000 /* Convert to seconds so we get rad/s
-             */));
 
         f32 ngang_x =
             gyro_angle_x + ((gyro_raw_x - s_device.cal_gy_x) * elapsed_time);
@@ -352,9 +377,9 @@ NORET static void sens_read_tsk(void *args)
         }
 
         s_device.roll =
-            (ALPHA * gyro_angle_x) + ((const f32)(100 - ALPHA) * acce_angle_x);
+            (ALPHA * gyro_angle_x) + ((const f32)(1 - ALPHA) * acce_angle_x);
         s_device.pitch =
-            (ALPHA * gyro_angle_y) + ((const f32)(100 - ALPHA) * acce_angle_y);
+            (ALPHA * gyro_angle_y) + ((const f32)(1 - ALPHA) * acce_angle_y);
 
         // printf(
         //     "%.2f \t %.2f \t %.2f \t %.2f\t %.2f\n", acce_angle_x,
@@ -396,11 +421,10 @@ esp_err_t imu_initialize(void)
     conf.master.clk_speed = I2C_FREQ;
     conf.clk_flags        = I2C_SCLK_SRC_FLAG_FOR_NOMAL;
 
-    s_device.ac_x = s_device.ac_y = s_device.ac_z = 0;
     s_device.cal_ac_x = s_device.cal_ac_y = 0;
-    s_device.gy_x = s_device.gy_y = s_device.gy_z = 0;
     s_device.cal_gy_x = s_device.cal_gy_y = 0;
     s_device.roll = s_device.pitch = 0;
+    s_device.roll_uncertainty = s_device.pitch_uncertainty = 0;
 
     esp_err_t ret = i2c_param_config(I2C_PORT, &conf);
     if (ret != ESP_OK)
@@ -445,6 +469,8 @@ esp_err_t imu_initialize(void)
         return ret;
     }
 
+    mpu6050_calibrate();
+
     esp_rom_gpio_pad_select_gpio(INT_PIN);
     gpio_set_direction(INT_PIN, GPIO_MODE_INPUT);
     gpio_set_pull_mode(INT_PIN, GPIO_PULLUP_ONLY);
@@ -474,8 +500,6 @@ esp_err_t imu_initialize(void)
 
     vTaskDelay(
         pdMS_TO_TICKS(250) /* Startup time specified in the datasheet */);
-
-    mpu6050_calibrate();
 
     return ret;
 }
