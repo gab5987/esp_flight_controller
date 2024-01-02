@@ -13,14 +13,17 @@
  * data. CRCs might just enought.
  * */
 
+#include <alloca.h>
 #include <esp_err.h>
 #include <esp_log.h>
+#include <esp_mac.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <stdlib.h>
 
 #include "cfg.h"
 
@@ -31,23 +34,24 @@ static const char TAG[] = "telemetry";
 
 static const wifi_mode_t ESPNOW_WIFI_MODE = WIFI_MODE_STA;
 static const byte        ESPNOW_CHANNEL   = 1;
-/* Bothe the controller(master) and this device(slave) must share the same PMK*/
-static const char ESPNOW_PMK[]                    = "pmkrsh05iw2aewm";
-static const byte BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {0xff, 0xff, 0xff,
-                                                     0xff, 0xff, 0xff};
+/* Both the controller(master) and this device(slave) must share the same PMK*/
+static const char ESPNOW_PMK[] = "pmkrsh05iw2aewm";
+// static const size_t MAX_DATA_LEN                    = UINT_LEAST8_MAX;
+// static const byte   BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {0xff, 0xff, 0xff,
+//                                                        0xff, 0xff, 0xff};
 
-static void sendcb(const u8 *mac_addr, esp_now_send_status_t status)
+struct PACKED data_exchange
 {
-    if (mac_addr == NULL)
-    {
-        ESP_LOGE(TAG, "Send cb arg error");
-        return;
-    }
-}
+    u8   msg_type;
+    u16  crc;
+    byte flags;
+    u8   data_len;
+    const byte *restrict payload;
+};
+typedef struct data_exchange data_exchange_t;
 
 static void rcvcb(
-    const esp_now_recv_info_t *restrict recv_info, const byte *restrict data,
-    i32 len)
+    const esp_now_recv_info_t *restrict recv_info, const byte *data, i32 len)
 {
     byte *mac_addr = recv_info->src_addr;
 
@@ -56,6 +60,20 @@ static void rcvcb(
         ESP_LOGE(TAG, "Receive cb arg error");
         return;
     }
+
+    data_exchange_t debf = {
+        .msg_type = data[0],
+        .crc      = (data[1] << 8) | data[2],
+        .flags    = data[3],
+        .data_len = data[4],
+        .payload  = &data[5],
+    };
+}
+
+inline static void sendcb(const u8 *mac_addr, esp_now_send_status_t status)
+{
+    ESP_LOGI(
+        TAG, "Send data to " MACSTR ", status: %d", MAC2STR(mac_addr), status);
 }
 
 esp_err_t tel_initialize(void)
