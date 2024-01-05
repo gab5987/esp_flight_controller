@@ -28,6 +28,7 @@
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <math.h>
+#include <string.h>
 
 #include "cfg.h"
 #include "hal.h"
@@ -81,6 +82,7 @@ static const byte       I2C_ADDR = 0x68U << 1;
 static const u32        I2C_FREQ = 400000;
 // static const gpio_num_t INT_PIN                = GPIO_NUM_12;
 static const i64 MEASUREMENT_CYCLE_TIME = 8000; /*[us]: 250 sps */
+static const f32 CAL_ITERATIONS         = 2000.0F;
 
 /* MPU6050 register */
 static const u16 MPU6050_DLPF_CONFIG  = 0x1AU;
@@ -280,6 +282,45 @@ esp_err_t mpu6050_request_data(struct mpu6050_axis_data *axdata)
     return ret;
 }
 
+static void gyro_calibration(void)
+{
+    struct mpu6050_axis_data cal_data;
+    struct
+    {
+        f64 x, y, z;
+    } cal_axis     = {.x = 0.0F, .y = 0.0F, .z = 0.0F};
+    u16 iterations = 0;
+
+    while (iterations < (u16)CAL_ITERATIONS)
+    {
+        ESP_ERROR_CHECK(mpu6050_request_data(&cal_data));
+        cal_axis.x += cal_data.gyro_x;
+        cal_axis.y += cal_data.gyro_y;
+        cal_axis.z += cal_data.gyro_z;
+        iterations++;
+
+        char      prbf[21] = {0};
+        const u16 cstp     = iterations / 100;
+        for (u16 i = 0; i < 21; i++) prbf[i] = i <= cstp ? '^' : '_';
+        printf(
+            "\033[36m\033[1A" /* Move cursor up one line*/ "\nCalibrating the "
+            "gyroscope \t\t [%s] %d%%",
+            prbf, iterations / 20);
+        // fflush(stdout); Cannot use fflush, dunno why
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    s_gyro_cal.x = (cal_axis.x /= CAL_ITERATIONS);
+    s_gyro_cal.y = (cal_axis.y /= CAL_ITERATIONS);
+    s_gyro_cal.z = (cal_axis.z /= CAL_ITERATIONS);
+
+    puts("\n");
+    ESP_LOGI(
+        TAG,
+        "---> Gyroscope calibration done <--- x: %.24f\t| y: %.24f\t| z: %.24f",
+        s_gyro_cal.x, s_gyro_cal.y, s_gyro_cal.z);
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
+
 /*
         Y Axis
          ↑ ↻
@@ -305,40 +346,6 @@ static void sensread(UNUSED void *arg)
 
     esp_err_t err = mpu6050_request_data(&axd);
     if (err != ESP_OK) return;
-
-// #define CALIBRATION
-#ifdef CALIBRATION
-    static const f32                max_iterations = 2000.0F;
-    static u16                      iterations     = 0;
-    static struct mpu6050_axis_data cal_data       = {
-              .acce_z = 0,
-              .acce_y = 0,
-              .acce_x = 0,
-              .gyro_y = 0,
-              .gyro_z = 0,
-              .gyro_x = 0};
-    if (iterations > 2000) return;
-    iterations++;
-    if (iterations == 2000)
-    {
-        printf(
-            "accelerometer -> x: %.24f\t| y: %.24f\t| z: %.24f\n",
-            cal_data.acce_x / max_iterations, cal_data.acce_y / max_iterations,
-            cal_data.acce_z / max_iterations);
-        printf(
-            "gyroscope -> x: %.24f\t| y: %.24f\t| z: %.24f\n\n",
-            cal_data.gyro_x / max_iterations, cal_data.gyro_y / max_iterations,
-            cal_data.gyro_z / max_iterations);
-        return;
-    }
-    cal_data.acce_x += axd.acce_x;
-    cal_data.acce_y += axd.acce_y;
-    cal_data.acce_z += axd.acce_z;
-    cal_data.gyro_x += axd.gyro_x;
-    cal_data.gyro_y += axd.gyro_y;
-    cal_data.gyro_z += axd.gyro_z;
-    return;
-#endif /* ifdef DEBUG_LOG */
 
     /*
      * Given a rotation matrix R, we can compute the Euler angles, ψ, θ, and
@@ -391,7 +398,7 @@ static void sensread(UNUSED void *arg)
         roll_uncertainty = (1 - roll_gain) * roll_uncertainty;
     }
 
-    printf("r: %.2f \t p: %.2f\n", s_roll, s_pitch);
+    // printf("r: %.2f \t p: %.2f\n", s_roll, s_pitch);
 }
 
 esp_err_t imu_get_complimentary_angle(complimentary_angle_t *const cang)
@@ -448,6 +455,8 @@ esp_err_t imu_initialize(void)
 
     ESP_ERROR_CHECK(mpu6050_get_gyro_sensitivity(&s_gyro_sensitivity));
     ESP_ERROR_CHECK(mpu6050_get_acce_sensitivity(&s_acce_sensitivity));
+
+    gyro_calibration();
 
     const esp_timer_create_args_t periodic_timer_args = {
         .callback = &sensread, .name = "mpu6050"};
