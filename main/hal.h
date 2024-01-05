@@ -7,8 +7,8 @@
 
 typedef struct
 {
-    f32 roll;
-    f32 pitch;
+    f64 roll;
+    f64 pitch;
 } complimentary_angle_t;
 
 esp_err_t imu_get_complimentary_angle(complimentary_angle_t *);
