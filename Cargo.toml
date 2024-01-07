@@ -1,7 +1,7 @@
 [package]
 name = "espnow-flight-controller"
 version = "0.1.0"
-authors = ["gab5987 <biell.gb4@gmail.com>"]
+authors = ["gab5987 <gabriel_novalski4@gmail.com>"]
 edition = "2021"
 resolver = "2"
 rust-version = "1.71"
