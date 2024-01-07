@@ -471,7 +471,7 @@ esp_err_t imu_initialize(void)
     ret = esp_timer_start_periodic(s_timer_handler, MEASUREMENT_CYCLE_TIME);
     if (ret != ESP_OK)
     {
-        ESP_LOGE(TAG, "Navigator failed to start: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Timer failed to start: %s", esp_err_to_name(ret));
         abort();
     }
 

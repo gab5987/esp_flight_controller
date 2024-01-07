@@ -40,12 +40,18 @@ static const char ESPNOW_PMK[] = "pmkrsh05iw2aewm";
 // static const byte   BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {0xff, 0xff, 0xff,
 //                                                        0xff, 0xff, 0xff};
 
+enum msg_type_e
+{
+    MSG_POSR_REQ   = 0x00,
+    MSG_POS_UPDATE = 0x01,
+};
+
 struct PACKED data_exchange
 {
-    u8   msg_type;
-    u16  crc;
-    byte flags;
-    u8   data_len;
+    enum msg_type_e msg_type;
+    u16             crc;
+    byte            flags;
+    u8              data_len;
     const byte *restrict payload;
 };
 typedef struct data_exchange data_exchange_t;
