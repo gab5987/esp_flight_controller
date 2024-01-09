@@ -656,6 +656,7 @@ dependencies = [
  "embedded-hal 0.2.7",
  "embuild",
  "esp-idf-svc",
+ "lazy_static",
  "log",
 ]
 

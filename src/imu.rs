@@ -20,7 +20,9 @@
  * accelerometer and the gyroscope data using Kalman's filter model.
  * */
 
-use esp_idf_svc::{hal::{prelude::*, i2c::{I2cConfig, I2cDriver}, peripherals::Peripherals, delay::{BLOCK, FreeRtos}}, sys::*};
+use std::ffi::CString;
+use lazy_static::lazy_static;
+use esp_idf_svc::{hal::{prelude::*, i2c::{I2cConfig, I2cDriver}, peripherals::Peripherals, delay::{BLOCK, FreeRtos}, timer::{TimerDriver, config}, task::{self, notification::Notification}, cpu::Core}, sys::*, timer::EspTimer};
 
 #[repr(u8)]
 enum AcceFs
@@ -272,24 +274,46 @@ impl MPU6050<'_> {
     } 
 }
 
-// static DEV_ANGLE: CompFilter = CompFilter{ roll: 0.0, pitch: 0.0 };
-
-pub fn initialize() -> i32 
+pub struct Imu<'entire>
 {
-    let mut mpu6050 = MPU6050::new().unwrap();
-
-    let _ = mpu6050.setup();
-
-    let _ = mpu6050.calibrate();
-
-    // let mut axd = init_mpu6050_axis_data!();
-    //
-    // loop 
-    // {
-    //     let _ = mpu6050.read(&mut axd);
-    //     log::info!("\nacce -> x: {} | y: {} | z: {}\ngyro -> x: {} | y: {} | z: {}", axd.acce.x,axd.acce.y,axd.acce.x,axd.gyro.x,axd.gyro.y,axd.gyro.z);
-    //     FreeRtos::delay_ms(1000);
-    // }
-
-    return ESP_OK; 
+    mpu6050dev: MPU6050<'entire>,
 }
+
+impl Imu<'_> {
+    pub fn new() -> Result<Self, EspError>
+    {
+        let mut mpu6050dev = MPU6050::new()?;
+       
+        mpu6050dev.setup()?;
+        // mpu6050dev.calibrate()?;
+
+        return Ok(Self { mpu6050dev });
+    }
+
+    pub fn run(&mut self) -> Result<(), EspError>
+    {
+
+        let builder = std::thread::Builder::new()
+            .name("sensread".into())
+            .stack_size(4096);
+    
+        if let Err(_) = builder.spawn(|| {
+            let mut axd = init_mpu6050_axis_data!();
+            loop
+            {
+                let _ = self.mpu6050dev.read(&mut axd);
+                log::info!("\nacce -> x: {} | y: {} | z: {}\ngyro -> x: {} | y: {} | z: {}", axd.acce.x,axd.acce.y,axd.acce.x,axd.gyro.x,axd.gyro.y,axd.gyro.z);
+                FreeRtos::delay_ms(400);
+            }
+        })
+        
+        {
+            log::error!("Could not create read task!");
+            return Err(EspError::from(ESP_FAIL).unwrap());
+        }
+
+        
+        return Ok(());
+    }
+}
+
