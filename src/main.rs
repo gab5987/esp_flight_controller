@@ -8,12 +8,12 @@ fn main() {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let mut imu_inst: imu::Imu = imu::Imu::new().unwrap();
-
-    if let Err(e) = imu_inst.run() {
+    if let Err(e) = imu::initialize() {
         log::error!("Imu failed to Initialize -> {}", e.to_string());
         unsafe { abort(); };
     }
+
+    let _ = imu::run().unwrap().join();
 
     loop 
     {

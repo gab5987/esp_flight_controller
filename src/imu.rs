@@ -6,12 +6,10 @@
  * - Gyroscopic sensitivity shall be 1000 Dps -> Better response due to the lack
  * of adc bits in the 2000 Dps sensitivity
  *
- * REQ-MPU-001: Shall Read the values using a interruption pin in NEG_EDGE mode.
- * Every time the mpu finishes a conversion cycle, it must trigger a
- * interruption and read the values.
+ * REQ-MPU-001: Shall Read the values using a interruption timer or rtos task each 4 ms.
  *
  * REQ-MPU-001: Shall calibrate the mpu during the first boot, a simple mean of
- * a couple measurements might be good enought ig
+ * a couple measurements might be good enought.
  *
  * REQ-MPU-003: Shall convert the raw data to rad/s, preferably during the read
  * function to avoid future overheading.
@@ -20,9 +18,13 @@
  * accelerometer and the gyroscope data using Kalman's filter model.
  * */
 
-use std::ffi::CString;
+use std::{sync::Mutex, thread::JoinHandle};
+use std::f32::consts::PI;
 use lazy_static::lazy_static;
-use esp_idf_svc::{hal::{prelude::*, i2c::{I2cConfig, I2cDriver}, peripherals::Peripherals, delay::{BLOCK, FreeRtos}, timer::{TimerDriver, config}, task::{self, notification::Notification}, cpu::Core}, sys::*, timer::EspTimer};
+use esp_idf_svc::hal::{prelude::*, i2c::{I2cConfig, I2cDriver}};
+use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::hal::delay::{BLOCK, FreeRtos};
+use esp_idf_svc::sys::*;
 
 #[repr(u8)]
 enum AcceFs
@@ -102,7 +104,9 @@ struct MPU6050<'a> {
     acce_sens: f32,
 }
 
+const RAD_TO_DEG: f32 = 1.0 / (PI / 180.0);
 const CAL_ITERATIONS: u16 = 2000;
+const I2C_ADDR: u8 = 0x68;
 
 impl MPU6050<'_> {
     pub fn new() -> Result<Self, EspError>
@@ -110,12 +114,17 @@ impl MPU6050<'_> {
         let peripherals = Peripherals::take().unwrap();
         let sda_pin = peripherals.pins.gpio21;
         let scl_pin = peripherals.pins.gpio22;
-        let addr = 0x68;
 
         let config = I2cConfig::new().baudrate(400.kHz().into());
         let driver = I2cDriver::new(peripherals.i2c0, sda_pin, scl_pin, &config)?;
 
-        return Ok(Self { driver, addr, gyro_cal: Axis{x: 0.0, y: 0.0, z: 0.0}, gyro_sens: 0.0, acce_sens: 0.0 })
+        return Ok(Self {
+            driver,
+            addr: I2C_ADDR,
+            gyro_cal: Axis{x: 0.0, y: 0.0, z: 0.0},
+            gyro_sens: 0.0,
+            acce_sens: 0.0
+        });
     }
     
     fn writeregister<const N: usize>(&mut self, reg_start_addr: Register, data_buf: &[u8; N]) -> Result<(), EspError>
@@ -274,46 +283,112 @@ impl MPU6050<'_> {
     } 
 }
 
-pub struct Imu<'entire>
-{
-    mpu6050dev: MPU6050<'entire>,
+lazy_static! {
+    static ref mpu6050: Mutex<MPU6050<'static>> = {
+        Mutex::new(MPU6050::new().unwrap())
+    };
 }
 
-impl Imu<'_> {
-    pub fn new() -> Result<Self, EspError>
+/*
+        Y Axis
+         ↑ ↻
+         ↑ ↻
+         ↑ ↻
+  * * * * * * * * *
+  *               *
+  *   MPU 6050    * X Axis
+  *               * → → →
+  *               * ↩ ↩ ↩
+  *               *
+  * ()            *
+  * * * * * * * * *
+    Z Axis ⇪ ↺
+ * */
+
+fn sensread() -> EspError
+{
+    let mut axd = init_mpu6050_axis_data!();
+    let mut roll_uncertainty: f32 = 0.0;
+    let mut pitch_uncertainty: f32 = 0.0;
+    let (mut roll, mut pitch): (f32, f32) = (0.0, 0.0);
+
+    loop
     {
-        let mut mpu6050dev = MPU6050::new()?;
-       
-        mpu6050dev.setup()?;
-        // mpu6050dev.calibrate()?;
-
-        return Ok(Self { mpu6050dev });
-    }
-
-    pub fn run(&mut self) -> Result<(), EspError>
-    {
-
-        let builder = std::thread::Builder::new()
-            .name("sensread".into())
-            .stack_size(4096);
-    
-        if let Err(_) = builder.spawn(|| {
-            let mut axd = init_mpu6050_axis_data!();
-            loop
-            {
-                let _ = self.mpu6050dev.read(&mut axd);
-                log::info!("\nacce -> x: {} | y: {} | z: {}\ngyro -> x: {} | y: {} | z: {}", axd.acce.x,axd.acce.y,axd.acce.x,axd.gyro.x,axd.gyro.y,axd.gyro.z);
-                FreeRtos::delay_ms(400);
-            }
-        })
+        match mpu6050.lock() {
+            Ok(mut lk) => { let _ = lk.read(&mut axd); },
+            Err(_) => {
+                log::warn!("Could not acquire mpu6050 lock");
+                continue;
+            },
+        };
         
-        {
+        /*
+         * Given a rotation matrix R, we can compute the Euler angles, ψ, θ, and
+         * φ by equating each element in R with the corresponding element in the
+         * matrix product Rz(φ)Ry(θ)Rx(ψ).
+         *
+         * - φ is the signed angle between the x axis and the N axis
+         *  (x-convention – it could also be defined between y and N, called
+         * y-convention).
+         * - θ is the angle between the z axis and the Z axis.
+         * - ψ is the signed angle between the N axis and the X axis
+         * (x-convention).
+         *
+         * Euler discrete angle formulas:
+         * Ay(rad) = atangent( X / √(Y² + Z²) )
+         * Ax(rad) = atangent( Y / √(X² + Z²) )
+         * */
+
+        let powacz_2 = axd.acce.z.powi(2);
+
+        let acce_angle_x = (axd.acce.y / (axd.acce.x.powi(2) + powacz_2).sqrt()).atan() * RAD_TO_DEG;
+        let acce_angle_y = -1.0 * (axd.acce.x / (axd.acce.y.powi(2) + powacz_2).sqrt()).atan() * RAD_TO_DEG;
+
+        roll += 0.004 * axd.acce.x;
+        roll_uncertainty += 0.004 * 0.004 * 4.0 * 4.0;
+        let roll_gain: f32 = roll_uncertainty / (roll_uncertainty + (3.0 * 3.0));
+        roll += roll_gain * (acce_angle_x - roll); 
+        roll_uncertainty = (1.0 - roll_gain) * roll_uncertainty;
+
+        pitch += 0.004 * axd.acce.y;
+        pitch_uncertainty += 0.004 * 0.004 * 4.0 * 4.0;
+        let pitch_gain: f32 = pitch_uncertainty / (pitch_uncertainty + (3.0 * 3.0));
+        pitch += pitch_gain * (acce_angle_y - pitch); 
+        pitch_uncertainty = (1.0 - pitch_gain) * pitch_uncertainty;
+
+        log::info!("roll: {} | pitch: {}", roll, pitch);
+
+        // log::info!("\nacce -> x: {} | y: {} | z: {}\ngyro -> x: {} | y: {} | z: {}", axd.acce.x,axd.acce.y,axd.acce.x,axd.gyro.x,axd.gyro.y,axd.gyro.z);
+        FreeRtos::delay_ms(4);
+    }
+}
+
+pub fn run() -> Result<JoinHandle<EspError>, EspError>
+{
+    let builder = std::thread::Builder::new()
+        .name("sensread".into())
+        .stack_size(4096);
+
+    return match builder.spawn(sensread)
+    {
+        Ok(tsk) => Ok(tsk),
+        Err(_) => {
             log::error!("Could not create read task!");
             return Err(EspError::from(ESP_FAIL).unwrap());
         }
-
-        
-        return Ok(());
     }
+}
+
+pub fn initialize() -> Result<(), EspError>
+{
+    return match mpu6050.lock()
+    {
+        Ok(mut dev) => {
+            dev.setup()?;
+            dev.calibrate()?;
+            return Ok(());
+        },
+        Err(_) => Err(EspError::from(ESP_ERR_INVALID_STATE).unwrap()),
+    };
 }
 
