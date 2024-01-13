@@ -18,48 +18,47 @@
  * accelerometer and the gyroscope data using Kalman's filter model.
  * */
 
-use std::{sync::Mutex, thread::JoinHandle};
-use std::f32::consts::PI;
-use lazy_static::lazy_static;
-use esp_idf_svc::hal::{prelude::*, i2c::{I2cConfig, I2cDriver}};
+use esp_idf_svc::hal::delay::{FreeRtos, BLOCK};
 use esp_idf_svc::hal::peripherals::Peripherals;
-use esp_idf_svc::hal::delay::{BLOCK, FreeRtos};
+use esp_idf_svc::hal::{
+    i2c::{I2cConfig, I2cDriver},
+    prelude::*,
+};
 use esp_idf_svc::sys::*;
+use lazy_static::lazy_static;
+use std::f32::consts::PI;
+use std::{sync::Mutex, thread::JoinHandle};
 
 #[repr(u8)]
-enum AcceFs
-{
-    Fs2g  = 0, // !< Accelerometer full scale range is +/- 2g
-    Fs4g  = 1, // !< Accelerometer full scale range is +/- 4g
-    Fs8g  = 2, // !< Accelerometer full scale range is +/- 8g
+enum AcceFs {
+    Fs2g = 0,  // !< Accelerometer full scale range is +/- 2g
+    Fs4g = 1,  // !< Accelerometer full scale range is +/- 4g
+    Fs8g = 2,  // !< Accelerometer full scale range is +/- 8g
     Fs16g = 3, // !< Accelerometer full scale range is +/- 16g
 }
 
 #[repr(C)]
-enum GyroFs
-{
-    Dps250 = 0, // !< Gyroscope full scale range is +/- 250 degree per sencond
-    Dps500 = 1, // !< Gyroscope full scale range is +/- 500 degree per sencond 
-    Dps1000 = 2, // !< Gyroscope full scale range is +/- 1000 degree per sencond 
+enum GyroFs {
+    Dps250 = 0,  // !< Gyroscope full scale range is +/- 250 degree per sencond
+    Dps500 = 1,  // !< Gyroscope full scale range is +/- 500 degree per sencond
+    Dps1000 = 2, // !< Gyroscope full scale range is +/- 1000 degree per sencond
     Dps2000 = 3, // !< Gyroscope full scale range is +/- 2000 degree per sencond
 }
 
 #[repr(u8)]
-enum DlpfCf
-{
-    Dlpf260 = 0, // !< The low pass filter is configurated to 260 Hz 
-    Dlpf184 = 1, // !< The low pass filter is configurated to 184 Hz 
-    Dlpf94  = 2, // !< The low pass filter is configurated to 94 Hz 
-    Dlpf44  = 3, // !< The low pass filter is configurated to 44 Hz 
-    Dlpf21  = 4, // !< The low pass filter is configurated to 21 Hz 
-    Dlpf10  = 5, // !< The low pass filter is configurated to 10 Hz 
-    Dlpf5   = 6, // !< The low pass filter is configurated to 5 Hz 
+enum DlpfCf {
+    Dlpf260 = 0, // !< The low pass filter is configurated to 260 Hz
+    Dlpf184 = 1, // !< The low pass filter is configurated to 184 Hz
+    Dlpf94 = 2,  // !< The low pass filter is configurated to 94 Hz
+    Dlpf44 = 3,  // !< The low pass filter is configurated to 44 Hz
+    Dlpf21 = 4,  // !< The low pass filter is configurated to 21 Hz
+    Dlpf10 = 5,  // !< The low pass filter is configurated to 10 Hz
+    Dlpf5 = 6,   // !< The low pass filter is configurated to 5 Hz
 }
 
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
-enum Register
-{
+enum Register {
     DlpfConfig = 0x1A,
     GyroConfig = 0x1B,
     AccelConfig = 0x1C,
@@ -67,15 +66,13 @@ enum Register
     PwrMgt1 = 0x6B,
 }
 
-pub struct Axis
-{
+pub struct Axis {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
 
-pub struct Mpu6050AxisData
-{
+pub struct Mpu6050AxisData {
     acce: Axis,
     gyro: Axis,
 }
@@ -83,14 +80,21 @@ pub struct Mpu6050AxisData
 macro_rules! init_mpu6050_axis_data {
     () => {
         Mpu6050AxisData {
-            acce: Axis{x: 0.0, y: 0.0, z: 0.0},
-            gyro: Axis{x: 0.0, y: 0.0, z: 0.0},
+            acce: Axis {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            gyro: Axis {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
         }
     };
 }
 
-pub struct CompFilter
-{
+pub struct CompFilter {
     pub roll: f32,
     pub pitch: f32,
 }
@@ -109,8 +113,7 @@ const CAL_ITERATIONS: u16 = 2000;
 const I2C_ADDR: u8 = 0x68;
 
 impl MPU6050<'_> {
-    pub fn new() -> Result<Self, EspError>
-    {
+    pub fn new() -> Result<Self, EspError> {
         let peripherals = Peripherals::take().unwrap();
         let sda_pin = peripherals.pins.gpio21;
         let scl_pin = peripherals.pins.gpio22;
@@ -121,45 +124,60 @@ impl MPU6050<'_> {
         return Ok(Self {
             driver,
             addr: I2C_ADDR,
-            gyro_cal: Axis{x: 0.0, y: 0.0, z: 0.0},
+            gyro_cal: Axis {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
             gyro_sens: 0.0,
-            acce_sens: 0.0
+            acce_sens: 0.0,
         });
     }
-    
-    fn writeregister<const N: usize>(&mut self, reg_start_addr: Register, data_buf: &[u8; N]) -> Result<(), EspError>
-    {
+
+    fn writeregister<const N: usize>(
+        &mut self,
+        reg_start_addr: Register,
+        data_buf: &[u8; N],
+    ) -> Result<(), EspError> {
         let mut reg = vec![reg_start_addr as u8; N + 1];
-        for i in 0..data_buf.len() { reg[i+1] = data_buf[i]; }
+        for i in 0..data_buf.len() {
+            reg[i + 1] = data_buf[i];
+        }
 
-        if let Err(e) = self.driver.write(self.addr, &reg, BLOCK)
-        {
-            log::error!("Error while writting to register {:#04x} -> {}", reg[0], e.to_string());
+        if let Err(e) = self.driver.write(self.addr, &reg, BLOCK) {
+            log::error!(
+                "Error while writting to register {:#04x} -> {}",
+                reg[0],
+                e.to_string()
+            );
             return Err(e);
         }
 
         return Ok(());
     }
-    
-    fn readregister(&mut self, reg_start_addr: Register, data_buf: &mut [u8]) -> Result<(), EspError>
-    {
+
+    fn readregister(
+        &mut self,
+        reg_start_addr: Register,
+        data_buf: &mut [u8],
+    ) -> Result<(), EspError> {
         let reg: [u8; 1] = [reg_start_addr as u8];
-        if let Err(e) = self.driver.write_read(self.addr, &reg, data_buf, BLOCK)
-        {
-            log::error!("Error while reading from register {:#04x} -> {}", reg[0], e.to_string());
+        if let Err(e) = self.driver.write_read(self.addr, &reg, data_buf, BLOCK) {
+            log::error!(
+                "Error while reading from register {:#04x} -> {}",
+                reg[0],
+                e.to_string()
+            );
             return Err(e);
         }
 
         return Ok(());
-
     }
 
-    fn get_gyro_sensitivity(&mut self) -> Result<f32, EspError>
-    {
+    fn get_gyro_sensitivity(&mut self) -> Result<f32, EspError> {
         let mut regcfg: [u8; 1] = [0];
         self.readregister(Register::GyroConfig, &mut regcfg)?;
-        let val: f32 = match (regcfg[0] >> 3) & 0x03
-        {
+        let val: f32 = match (regcfg[0] >> 3) & 0x03 {
             0 => 131.0,
             1 => 65.5,
             2 => 32.8,
@@ -169,12 +187,10 @@ impl MPU6050<'_> {
         return Ok(val);
     }
 
-    fn get_acce_sensitivity(&mut self) -> Result<f32, EspError>
-    {
+    fn get_acce_sensitivity(&mut self) -> Result<f32, EspError> {
         let mut regcfg: [u8; 1] = [0];
         self.readregister(Register::AccelConfig, &mut regcfg)?;
-        let val: f32 = match (regcfg[0] >> 3) & 0x03
-        {
+        let val: f32 = match (regcfg[0] >> 3) & 0x03 {
             0 => 16384.0,
             1 => 8192.0,
             2 => 4096.0,
@@ -184,8 +200,7 @@ impl MPU6050<'_> {
         return Ok(val);
     }
 
-    fn wakeup(&mut self) -> Result<(), EspError>
-    {
+    fn wakeup(&mut self) -> Result<(), EspError> {
         let mut recfg: [u8; 1] = [0];
         self.readregister(Register::PwrMgt1, &mut recfg)?;
         recfg[0] &= !0x00000040;
@@ -193,8 +208,7 @@ impl MPU6050<'_> {
         return Ok(());
     }
 
-    fn sleep(&mut self) -> Result<(), EspError>
-    {
+    fn sleep(&mut self) -> Result<(), EspError> {
         let mut recfg: [u8; 1] = [0];
         self.readregister(Register::PwrMgt1, &mut recfg)?;
         recfg[0] |= 0x00000040;
@@ -202,14 +216,12 @@ impl MPU6050<'_> {
         return Ok(());
     }
 
-    pub fn read(&mut self, axd: &mut Mpu6050AxisData) -> Result<(), EspError>
-    {
+    pub fn read(&mut self, axd: &mut Mpu6050AxisData) -> Result<(), EspError> {
         /* Somehow i could read all the registers on a single burst by
          * requesting past the 6 bytes from the accelerometer register */
         let mut data_rd: [u8; 14] = [0; 14];
 
-        if let Err(e) = self.readregister(Register::AccelXoutH, &mut data_rd)
-        {
+        if let Err(e) = self.readregister(Register::AccelXoutH, &mut data_rd) {
             log::error!("Could not read data from mpu6050! {}", e.to_string());
             return Err(e);
         }
@@ -238,14 +250,16 @@ impl MPU6050<'_> {
         return Ok(());
     }
 
-    pub fn calibrate(&mut self) -> Result<(), EspError>
-    {
+    pub fn calibrate(&mut self) -> Result<(), EspError> {
         let mut cal_data = init_mpu6050_axis_data!();
-        let mut cal_axis = Axis{ x: 0.0, y: 0.0, z: 0.0 };
+        let mut cal_axis = Axis {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
 
-        let mut iterations: u16 = 0;   
-        while iterations < CAL_ITERATIONS
-        {
+        let mut iterations: u16 = 0;
+        while iterations < CAL_ITERATIONS {
             let _ = self.read(&mut cal_data)?;
             cal_axis.x += cal_data.gyro.x;
             cal_axis.y += cal_data.gyro.y;
@@ -260,14 +274,15 @@ impl MPU6050<'_> {
 
         log::info!(
             "---> Gyroscope calibration done <--- X: {}\t| Y: {}\t| Z: {}",
-            self.gyro_cal.x, self.gyro_cal.y, self.gyro_cal.z
+            self.gyro_cal.x,
+            self.gyro_cal.y,
+            self.gyro_cal.z
         );
 
         return Ok(());
     }
 
-    pub fn setup(&mut self) -> Result<(), EspError>
-    {
+    pub fn setup(&mut self) -> Result<(), EspError> {
         self.wakeup()?;
 
         let regstp: [u8; 1] = [DlpfCf::Dlpf10 as u8];
@@ -280,48 +295,46 @@ impl MPU6050<'_> {
         self.acce_sens = self.get_acce_sensitivity()?;
 
         return Ok(());
-    } 
+    }
 }
 
 lazy_static! {
-    static ref mpu6050: Mutex<MPU6050<'static>> = {
-        Mutex::new(MPU6050::new().unwrap())
-    };
+    static ref mpu6050: Mutex<MPU6050<'static>> = { Mutex::new(MPU6050::new().unwrap()) };
 }
 
 /*
-        Y Axis
-         ↑ ↻
-         ↑ ↻
-         ↑ ↻
-  * * * * * * * * *
-  *               *
-  *   MPU 6050    * X Axis
-  *               * → → →
-  *               * ↩ ↩ ↩
-  *               *
-  * ()            *
-  * * * * * * * * *
-    Z Axis ⇪ ↺
- * */
+       Y Axis
+        ↑ ↻
+        ↑ ↻
+        ↑ ↻
+ * * * * * * * * *
+ *               *
+ *   MPU 6050    * X Axis
+ *               * → → →
+ *               * ↩ ↩ ↩
+ *               *
+ * ()            *
+ * * * * * * * * *
+   Z Axis ⇪ ↺
+* */
 
-fn sensread() -> EspError
-{
+fn sensread() -> EspError {
     let mut axd = init_mpu6050_axis_data!();
     let mut roll_uncertainty: f32 = 0.0;
     let mut pitch_uncertainty: f32 = 0.0;
     let (mut roll, mut pitch): (f32, f32) = (0.0, 0.0);
 
-    loop
-    {
+    loop {
         match mpu6050.lock() {
-            Ok(mut lk) => { let _ = lk.read(&mut axd); },
+            Ok(mut lk) => {
+                let _ = lk.read(&mut axd);
+            }
             Err(_) => {
                 log::warn!("Could not acquire mpu6050 lock");
                 continue;
-            },
+            }
         };
-        
+
         /*
          * Given a rotation matrix R, we can compute the Euler angles, ψ, θ, and
          * φ by equating each element in R with the corresponding element in the
@@ -341,19 +354,21 @@ fn sensread() -> EspError
 
         let powacz_2 = axd.acce.z.powi(2);
 
-        let acce_angle_x = (axd.acce.y / (axd.acce.x.powi(2) + powacz_2).sqrt()).atan() * RAD_TO_DEG;
-        let acce_angle_y = -1.0 * (axd.acce.x / (axd.acce.y.powi(2) + powacz_2).sqrt()).atan() * RAD_TO_DEG;
+        let acce_angle_x =
+            (axd.acce.y / (axd.acce.x.powi(2) + powacz_2).sqrt()).atan() * RAD_TO_DEG;
+        let acce_angle_y =
+            -1.0 * (axd.acce.x / (axd.acce.y.powi(2) + powacz_2).sqrt()).atan() * RAD_TO_DEG;
 
         roll += 0.004 * axd.acce.x;
         roll_uncertainty += 0.004 * 0.004 * 4.0 * 4.0;
         let roll_gain: f32 = roll_uncertainty / (roll_uncertainty + (3.0 * 3.0));
-        roll += roll_gain * (acce_angle_x - roll); 
+        roll += roll_gain * (acce_angle_x - roll);
         roll_uncertainty = (1.0 - roll_gain) * roll_uncertainty;
 
         pitch += 0.004 * axd.acce.y;
         pitch_uncertainty += 0.004 * 0.004 * 4.0 * 4.0;
         let pitch_gain: f32 = pitch_uncertainty / (pitch_uncertainty + (3.0 * 3.0));
-        pitch += pitch_gain * (acce_angle_y - pitch); 
+        pitch += pitch_gain * (acce_angle_y - pitch);
         pitch_uncertainty = (1.0 - pitch_gain) * pitch_uncertainty;
 
         log::info!("roll: {} | pitch: {}", roll, pitch);
@@ -363,32 +378,27 @@ fn sensread() -> EspError
     }
 }
 
-pub fn run() -> Result<JoinHandle<EspError>, EspError>
-{
+pub fn run() -> Result<JoinHandle<EspError>, EspError> {
     let builder = std::thread::Builder::new()
         .name("sensread".into())
         .stack_size(4096);
 
-    return match builder.spawn(sensread)
-    {
+    return match builder.spawn(sensread) {
         Ok(tsk) => Ok(tsk),
         Err(_) => {
             log::error!("Could not create read task!");
             return Err(EspError::from(ESP_FAIL).unwrap());
         }
-    }
+    };
 }
 
-pub fn initialize() -> Result<(), EspError>
-{
-    return match mpu6050.lock()
-    {
+pub fn initialize() -> Result<(), EspError> {
+    return match mpu6050.lock() {
         Ok(mut dev) => {
             dev.setup()?;
             dev.calibrate()?;
             return Ok(());
-        },
+        }
         Err(_) => Err(EspError::from(ESP_ERR_INVALID_STATE).unwrap()),
     };
 }
-
