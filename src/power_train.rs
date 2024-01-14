@@ -17,6 +17,8 @@
 
 use esp_idf_svc::sys::EspError;
 
+struct Motor {}
+
 pub fn initialize() -> Result<(), EspError> {
     return Ok(());
 }

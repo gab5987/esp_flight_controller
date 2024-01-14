@@ -25,9 +25,11 @@ use esp_idf_svc::hal::{
     prelude::*,
 };
 use esp_idf_svc::sys::*;
-use lazy_static::lazy_static;
 use std::f32::consts::PI;
-use std::{sync::Mutex, thread::JoinHandle};
+use std::{
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
+};
 
 #[repr(u8)]
 enum AcceFs {
@@ -298,10 +300,6 @@ impl MPU6050<'_> {
     }
 }
 
-lazy_static! {
-    static ref mpu6050: Mutex<MPU6050<'static>> = { Mutex::new(MPU6050::new().unwrap()) };
-}
-
 /*
        Y Axis
         ↑ ↻
@@ -318,10 +316,9 @@ lazy_static! {
    Z Axis ⇪ ↺
 * */
 
-fn sensread() -> EspError {
+fn sensread(mut mpu6050: &Arc<Mutex<MPU6050>>) -> EspError {
     let mut axd = init_mpu6050_axis_data!();
-    let mut roll_uncertainty: f32 = 0.0;
-    let mut pitch_uncertainty: f32 = 0.0;
+    let (mut roll_uncertainty, mut pitch_uncertainty): (f32, f32) = (0.0, 0.0);
     let (mut roll, mut pitch): (f32, f32) = (0.0, 0.0);
 
     loop {
@@ -378,27 +375,41 @@ fn sensread() -> EspError {
     }
 }
 
-pub fn run() -> Result<JoinHandle<EspError>, EspError> {
-    let builder = std::thread::Builder::new()
-        .name("sensread".into())
-        .stack_size(4096);
-
-    return match builder.spawn(sensread) {
-        Ok(tsk) => Ok(tsk),
-        Err(_) => {
-            log::error!("Could not create read task!");
-            return Err(EspError::from(ESP_FAIL).unwrap());
-        }
-    };
+pub struct Imu {
+    mpu6050dev: Arc<Mutex<MPU6050<'static>>>,
 }
 
-pub fn initialize() -> Result<(), EspError> {
-    return match mpu6050.lock() {
-        Ok(mut dev) => {
-            dev.setup()?;
-            dev.calibrate()?;
-            return Ok(());
-        }
-        Err(_) => Err(EspError::from(ESP_ERR_INVALID_STATE).unwrap()),
-    };
+impl Imu {
+    pub fn init() -> Result<Self, EspError> {
+        let mpu6050dev = Arc::new(Mutex::new(MPU6050::new()?));
+        return Ok(Self { mpu6050dev });
+    }
+
+    pub fn setup(&mut self) -> Result<(), EspError> {
+        return match self.mpu6050dev.lock() {
+            Ok(mut dev) => {
+                dev.setup()?;
+                dev.calibrate()?;
+                return Ok(());
+            }
+            Err(_) => Err(EspError::from(ESP_ERR_INVALID_STATE).unwrap()),
+        };
+    }
+
+    pub fn run(&mut self) -> Result<JoinHandle<EspError>, EspError> {
+        self.setup()?;
+
+        let builder = std::thread::Builder::new()
+            .name("sensread".into())
+            .stack_size(4096);
+
+        let mut cl_mpu = Arc::clone(&self.mpu6050dev);
+        return match builder.spawn(move || sensread(&mut cl_mpu)) {
+            Ok(tsk) => Ok(tsk),
+            Err(_) => {
+                log::error!("Could not create read task!");
+                return Err(EspError::from(ESP_FAIL).unwrap());
+            }
+        };
+    }
 }
