@@ -31,7 +31,6 @@ use std::{
     thread::JoinHandle,
 };
 
-#[repr(u8)]
 enum AcceFs {
     Fs2g = 0,  // !< Accelerometer full scale range is +/- 2g
     Fs4g = 1,  // !< Accelerometer full scale range is +/- 4g
@@ -47,7 +46,6 @@ enum GyroFs {
     Dps2000 = 3, // !< Gyroscope full scale range is +/- 2000 degree per sencond
 }
 
-#[repr(u8)]
 enum DlpfCf {
     Dlpf260 = 0, // !< The low pass filter is configurated to 260 Hz
     Dlpf184 = 1, // !< The low pass filter is configurated to 184 Hz
