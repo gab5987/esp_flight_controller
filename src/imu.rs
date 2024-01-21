@@ -32,38 +32,81 @@ use std::{
 };
 
 enum AcceFs {
-    Fs2g = 0,  // !< Accelerometer full scale range is +/- 2g
-    Fs4g = 1,  // !< Accelerometer full scale range is +/- 4g
-    Fs8g = 2,  // !< Accelerometer full scale range is +/- 8g
-    Fs16g = 3, // !< Accelerometer full scale range is +/- 16g
+    Fs2g,  // !< Accelerometer full scale range is +/- 2g
+    Fs4g,  // !< Accelerometer full scale range is +/- 4g
+    Fs8g,  // !< Accelerometer full scale range is +/- 8g
+    Fs16g, // !< Accelerometer full scale range is +/- 16g
+}
+impl From<AcceFs> for u8 {
+    fn from(val: AcceFs) -> Self {
+        match val {
+            AcceFs::Fs2g => 0,
+            AcceFs::Fs4g => 1,
+            AcceFs::Fs8g => 2,
+            AcceFs::Fs16g => 3,
+        }
+    }
 }
 
-#[repr(C)]
 enum GyroFs {
-    Dps250 = 0,  // !< Gyroscope full scale range is +/- 250 degree per sencond
-    Dps500 = 1,  // !< Gyroscope full scale range is +/- 500 degree per sencond
-    Dps1000 = 2, // !< Gyroscope full scale range is +/- 1000 degree per sencond
-    Dps2000 = 3, // !< Gyroscope full scale range is +/- 2000 degree per sencond
+    Dps250,  // !< Gyroscope full scale range is +/- 250 degree per sencond
+    Dps500,  // !< Gyroscope full scale range is +/- 500 degree per sencond
+    Dps1000, // !< Gyroscope full scale range is +/- 1000 degree per sencond
+    Dps2000, // !< Gyroscope full scale range is +/- 2000 degree per sencond
+}
+impl From<GyroFs> for u8 {
+    fn from(val: GyroFs) -> Self {
+        match val {
+            GyroFs::Dps250 => 0,
+            GyroFs::Dps500 => 1,
+            GyroFs::Dps1000 => 2,
+            GyroFs::Dps2000 => 3,
+        }
+    }
 }
 
 enum DlpfCf {
-    Dlpf260 = 0, // !< The low pass filter is configurated to 260 Hz
-    Dlpf184 = 1, // !< The low pass filter is configurated to 184 Hz
-    Dlpf94 = 2,  // !< The low pass filter is configurated to 94 Hz
-    Dlpf44 = 3,  // !< The low pass filter is configurated to 44 Hz
-    Dlpf21 = 4,  // !< The low pass filter is configurated to 21 Hz
-    Dlpf10 = 5,  // !< The low pass filter is configurated to 10 Hz
-    Dlpf5 = 6,   // !< The low pass filter is configurated to 5 Hz
+    Dlpf260, // !< The low pass filter is configurated to 260 Hz
+    Dlpf184, // !< The low pass filter is configurated to 184 Hz
+    Dlpf94,  // !< The low pass filter is configurated to 94 Hz
+    Dlpf44,  // !< The low pass filter is configurated to 44 Hz
+    Dlpf21,  // !< The low pass filter is configurated to 21 Hz
+    Dlpf10,  // !< The low pass filter is configurated to 10 Hz
+    Dlpf5,   // !< The low pass filter is configurated to 5 Hz
+}
+impl From<DlpfCf> for u8 {
+    fn from(val: DlpfCf) -> Self {
+        match val {
+            DlpfCf::Dlpf260 => 0,
+            DlpfCf::Dlpf184 => 1,
+            DlpfCf::Dlpf94 => 2,
+            DlpfCf::Dlpf44 => 3,
+            DlpfCf::Dlpf21 => 4,
+            DlpfCf::Dlpf10 => 5,
+            DlpfCf::Dlpf5 => 6,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 #[repr(u8)]
 enum Register {
-    DlpfConfig = 0x1A,
-    GyroConfig = 0x1B,
-    AccelConfig = 0x1C,
-    AccelXoutH = 0x3B,
-    PwrMgt1 = 0x6B,
+    DlpfConfig,
+    GyroConfig,
+    AccelConfig,
+    AccelXoutH,
+    PwrMgt1,
+}
+impl From<Register> for u8 {
+    fn from(reg: Register) -> Self {
+        match reg {
+            Register::DlpfConfig => 0x1A,
+            Register::GyroConfig => 0x1B,
+            Register::AccelConfig => 0x1C,
+            Register::AccelXoutH => 0x3B,
+            Register::PwrMgt1 => 0x6B,
+        }
+    }
 }
 
 pub struct Axis {
@@ -139,7 +182,7 @@ impl MPU6050<'_> {
         reg_start_addr: Register,
         data_buf: &[u8; N],
     ) -> Result<(), EspError> {
-        let mut reg = vec![reg_start_addr as u8; N + 1];
+        let mut reg = vec![reg_start_addr.into(); N + 1];
         for i in 0..data_buf.len() {
             reg[i + 1] = data_buf[i];
         }
@@ -161,7 +204,7 @@ impl MPU6050<'_> {
         reg_start_addr: Register,
         data_buf: &mut [u8],
     ) -> Result<(), EspError> {
-        let reg: [u8; 1] = [reg_start_addr as u8];
+        let reg: [u8; 1] = [reg_start_addr.into()];
         if let Err(e) = self.driver.write_read(self.addr, &reg, data_buf, BLOCK) {
             log::error!(
                 "Error while reading from register {:#04x} -> {}",
@@ -285,10 +328,13 @@ impl MPU6050<'_> {
     pub fn setup(&mut self) -> Result<(), EspError> {
         self.wakeup()?;
 
-        let regstp: [u8; 1] = [DlpfCf::Dlpf10 as u8];
+        let regstp: [u8; 1] = [DlpfCf::Dlpf10.into()];
         self.writeregister(Register::DlpfConfig, &regstp)?;
 
-        let regstp: [u8; 2] = [(GyroFs::Dps500 as u8) << 3, (AcceFs::Fs8g as u8) << 3];
+        let regstp: [u8; 2] = [
+            <GyroFs as Into<u8>>::into(GyroFs::Dps500) << 3,
+            <AcceFs as Into<u8>>::into(AcceFs::Fs8g) << 3,
+        ];
         self.writeregister(Register::GyroConfig, &regstp)?;
 
         self.gyro_sens = self.get_gyro_sensitivity()?;
